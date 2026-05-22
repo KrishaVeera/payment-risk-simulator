@@ -14,69 +14,85 @@ object RiskAgent {
   val rng            = util.Random
   val VelocityWindow = 60000L
   val VelocityLimit  = 3
+  val DedupWindow    = 60000L
 
   def apply(eventStore: ActorRef[EventStoreActor.Command]): Behavior[Command] =
-    active(Map.empty, eventStore)
+    active(Map.empty, Map.empty, eventStore)
 
   private def active(
                       recentPurchases: Map[String, List[Long]],
+                      seenPayments:    Map[String, Long],
                       eventStore:      ActorRef[EventStoreActor.Command]
                     ): Behavior[Command] =
     Behaviors.receive { (context, message) =>
       message match {
 
         case Score(forward, replyTo) =>
-          val payment = forward.payment
-          val now     = payment.timestamp
+          val payment   = forward.payment
+          val now       = payment.timestamp
 
-          context.log.info(s"RiskAgent scoring: ${payment.id} for $$${payment.amount} at ${payment.merchantName}")
+          // --- Deduplication Check ---
+          val isDuplicate = seenPayments.get(payment.id)
+            .exists(firstSeen => now - firstSeen < DedupWindow)
 
-          // --- Velocity Check ---
-          val cardHistory     = recentPurchases.getOrElse(payment.cardId, List.empty)
-          val recentWindow    = cardHistory.filter(t => now - t < VelocityWindow)
-          val velocityTripped = recentWindow.size >= VelocityLimit
+          if (isDuplicate) {
+            context.log.info(s"[DEDUP] Dropping duplicate payment: ${payment.id}")
+            active(recentPurchases, seenPayments, eventStore)
 
-          val updatedHistory  = now :: recentWindow
-          val updatedPurchases = recentPurchases.updated(payment.cardId, updatedHistory)
-
-          val outcome = if (velocityTripped) {
-            context.log.info(s"  [VELOCITY] Card ${payment.cardId} made ${recentWindow.size} purchases in 60s - auto-flagged!")
-            Declined
           } else {
 
-            // --- Weighted Scoring ---
-            var score = 0
+            context.log.info(s"RiskAgent scoring: ${payment.id} for $$${payment.amount} at ${payment.merchantName}")
 
-            if (payment.amount > 500) {
-              score += 30
-              context.log.info(s"  [+30] High amount: $$${payment.amount}")
+            val updatedSeenPayments = (seenPayments + (payment.id -> now))
+              .filter { case (_, ts) => now - ts < DedupWindow }
+
+            // --- Velocity Check ---
+            val cardHistory     = recentPurchases.getOrElse(payment.cardId, List.empty)
+            val recentWindow    = cardHistory.filter(t => now - t < VelocityWindow)
+            val velocityTripped = recentWindow.size >= VelocityLimit
+
+            val updatedHistory   = now :: recentWindow
+            val updatedPurchases = recentPurchases.updated(payment.cardId, updatedHistory)
+
+            val outcome = if (velocityTripped) {
+              context.log.info(s"  [VELOCITY] Card ${payment.cardId} made ${recentWindow.size} purchases in 60s - auto-flagged!")
+              Declined
+            } else {
+
+              // --- Weighted Scoring ---
+              var score = 0
+
+              if (payment.amount > 500) {
+                score += 30
+                context.log.info(s"  [+30] High amount: $$${payment.amount}")
+              }
+
+              val hour = Instant.ofEpochMilli(payment.timestamp)
+                .atZone(ZoneId.of("America/Toronto"))
+                .getHour
+              if (hour >= 23 || hour < 5) {
+                score += 25
+                context.log.info(s"  [+25] Late night transaction: ${hour}:00")
+              }
+
+              if (rng.nextDouble() < 0.15) {
+                score += 25
+                context.log.info(s"  [+25] Location anomaly flagged: ${payment.location}")
+              }
+
+              if (score >= 70) Declined
+              else if (score >= 40) HeldForReview
+              else Approved
             }
 
-            val hour = Instant.ofEpochMilli(payment.timestamp)
-              .atZone(ZoneId.of("America/Toronto"))
-              .getHour
-            if (hour >= 23 || hour < 5) {
-              score += 25
-              context.log.info(s"  [+25] Late night transaction: ${hour}:00")
-            }
+            context.log.info(s"RiskAgent decision for ${payment.id}: $outcome")
 
-            if (rng.nextDouble() < 0.15) {
-              score += 25
-              context.log.info(s"  [+25] Location anomaly flagged: ${payment.location}")
-            }
+            val decision = RiskDecision(paymentId = payment.id, outcome = outcome)
+            replyTo ! MerchantAgent.ReceiveDecision(decision)
+            eventStore ! EventStoreActor.RecordEvent(forward.payment, decision)
 
-            if (score >= 70) Declined
-            else if (score >= 40) HeldForReview
-            else Approved
+            active(updatedPurchases, updatedSeenPayments, eventStore)
           }
-
-          context.log.info(s"RiskAgent decision for ${payment.id}: $outcome")
-
-          val decision = RiskDecision(paymentId = payment.id, outcome = outcome)
-          replyTo ! MerchantAgent.ReceiveDecision(decision)
-          eventStore ! EventStoreActor.RecordEvent(forward.payment, decision)
-
-          active(updatedPurchases, eventStore)
       }
     }
 }

@@ -8,10 +8,16 @@ import models._
 import java.util.UUID
 import scala.concurrent.duration._
 
-object CustomerAgent {
+object FraudsterAgent {
 
   sealed trait Command
   case object Tick extends Command
+
+  // Small pool of stolen cards — reused constantly to trip velocity check
+  val stolenCards = List("STOLEN_01", "STOLEN_02", "STOLEN_03")
+
+  // Suspicious locations — always trips the location anomaly rule
+  val suspiciousLocations = List("Lagos", "Reykjavik", "Tokyo")
 
   val merchants = List(
     ("MERCH_001", "Tim Hortons"),
@@ -19,32 +25,27 @@ object CustomerAgent {
     ("MERCH_003", "Amazon")
   )
 
-  // Expanded pool — 20 cards so velocity is rarely tripped by legitimate use
-  val cards = (1 to 20).map(i => f"CARD_$i%02d").toList
-
-  // Legitimate locations only — no suspicious ones
-  val locations = List("Toronto", "New York", "London", "Vancouver", "Chicago", "Montreal")
-
   val rng = util.Random
 
   def apply(merchantAgent: ActorRef[MerchantAgent.Command]): Behavior[Command] = Behaviors.setup { context =>
     Behaviors.withTimers { timers =>
-      timers.startTimerWithFixedDelay(Tick, 2.seconds)
+      timers.startTimerWithFixedDelay(Tick, 300.millis)  // rapid burst
 
       Behaviors.receiveMessage {
         case Tick =>
           val (merchantId, merchantName) = merchants(rng.nextInt(merchants.size))
-          val cardId = cards(rng.nextInt(cards.size))
-          val payment = PaymentRequest(
+          val cardId   = stolenCards(rng.nextInt(stolenCards.size))
+          val location = suspiciousLocations(rng.nextInt(suspiciousLocations.size))
+          val payment  = PaymentRequest(
             id           = UUID.randomUUID().toString,
             cardId       = cardId,
-            amount       = 50 + rng.nextDouble() * 450,  // max $500 — avoids high amount rule
+            amount       = 600 + rng.nextDouble() * 400,  // always >$500 — trips high amount rule
             merchantId   = merchantId,
             merchantName = merchantName,
             timestamp    = System.currentTimeMillis(),
-            location     = locations(rng.nextInt(locations.size))
+            location     = location
           )
-          context.log.info(s"[LEGIT] CustomerAgent: ${payment.cardId} $$${payment.amount} at ${payment.merchantName}")
+          context.log.info(s"[FRAUD] FraudsterAgent: ${payment.cardId} $$${payment.amount} at ${payment.merchantName} from ${payment.location}")
           merchantAgent ! MerchantAgent.ReceivePayment(payment)
           Behaviors.same
       }
