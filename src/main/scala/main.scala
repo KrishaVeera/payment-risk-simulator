@@ -2,12 +2,16 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
 import actors._
 
+import scala.concurrent.Await
+import scala.concurrent.duration._
+
 object Main extends App {
 
   val system = ActorSystem(
     Behaviors.setup[Any] { context =>
 
-      val riskAgent     = context.spawn(RiskAgent(), "risk-agent")
+      val eventStore    = context.spawn(EventStoreActor(), "event-store")
+      val riskAgent     = context.spawn(RiskAgent(eventStore), "risk-agent")
       val merchantAgent = context.spawn(MerchantAgent(riskAgent), "merchant-agent")
       val customerAgent = context.spawn(CustomerAgent(merchantAgent), "customer-agent")
 
@@ -16,7 +20,8 @@ object Main extends App {
     "payment-risk-simulator"
   )
 
-  // Keep the system alive for 30 seconds so actors can run
-  Thread.sleep(30000)
+  // Run for 60 seconds then shut down
+  Thread.sleep(60000)
   system.terminate()
+  Await.result(system.whenTerminated, 5.seconds)
 }

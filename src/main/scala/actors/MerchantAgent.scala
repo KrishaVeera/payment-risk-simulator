@@ -16,7 +16,7 @@ object MerchantAgent {
       message match {
 
         case ReceivePayment(payment) =>
-          context.log.info(s" MerchantAgent received payment: ${payment.id} from card ${payment.cardId} for $${payment.amount} at ${payment.merchantName}")
+          context.log.info(s" MerchantAgent received payment: ${payment.id} from card ${payment.cardId} for ${payment.amount} at ${payment.merchantName}")
           val forward = ForwardToRisk(
             payment   = payment,
             timestamp = System.currentTimeMillis(),
