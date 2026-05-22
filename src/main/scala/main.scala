@@ -1,18 +1,22 @@
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
-import actors.HelloActor
+import actors._
 
-object main extends App {
+object Main extends App {
 
   val system = ActorSystem(
     Behaviors.setup[Any] { context =>
-      val helloActor = context.spawn(HelloActor(), "hello-actor")
-      helloActor ! HelloActor.SayHello("World")
+
+      val riskAgent     = context.spawn(RiskAgent(), "risk-agent")
+      val merchantAgent = context.spawn(MerchantAgent(riskAgent), "merchant-agent")
+      val customerAgent = context.spawn(CustomerAgent(merchantAgent), "customer-agent")
+
       Behaviors.empty
     },
-    name = "payment-risk-system"
+    "payment-risk-simulator"
   )
 
-  Thread.sleep(500)
+  // Keep the system alive for 30 seconds so actors can run
+  Thread.sleep(30000)
   system.terminate()
 }
