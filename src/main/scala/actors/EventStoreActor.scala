@@ -10,26 +10,25 @@ import scala.concurrent.duration._
 object EventStoreActor {
 
   sealed trait Command
-  case class RecordEvent(payment: PaymentRequest, decision: RiskDecision) extends Command
+  case class RecordEvent(payment: PaymentRequest, decision: RiskDecision, mlProbability: Double = -1.0) extends Command
   case object PrintSummary extends Command
 
-  // Database file will be created in your project root as events.db
   val DbUrl = "jdbc:sqlite:events.db"
 
-  // Initialize DB on startup — create table if it doesn't exist
   def initDb(): Unit = {
     val conn = DriverManager.getConnection(DbUrl)
     val stmt = conn.createStatement()
     stmt.execute("""
       CREATE TABLE IF NOT EXISTS payment_events (
-        payment_id    TEXT PRIMARY KEY,
-        card_id       TEXT NOT NULL,
-        amount        REAL NOT NULL,
-        merchant_id   TEXT NOT NULL,
-        merchant_name TEXT NOT NULL,
-        location      TEXT NOT NULL,
-        timestamp     INTEGER NOT NULL,
-        outcome       TEXT NOT NULL
+        payment_id      TEXT PRIMARY KEY,
+        card_id         TEXT NOT NULL,
+        amount          REAL NOT NULL,
+        merchant_id     TEXT NOT NULL,
+        merchant_name   TEXT NOT NULL,
+        location        TEXT NOT NULL,
+        timestamp       INTEGER NOT NULL,
+        outcome         TEXT NOT NULL,
+        ml_probability  REAL NOT NULL DEFAULT -1
       )
     """)
     stmt.close()
@@ -40,8 +39,8 @@ object EventStoreActor {
     val conn = DriverManager.getConnection(DbUrl)
     val ps = conn.prepareStatement("""
       INSERT OR IGNORE INTO payment_events
-        (payment_id, card_id, amount, merchant_id, merchant_name, location, timestamp, outcome)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (payment_id, card_id, amount, merchant_id, merchant_name, location, timestamp, outcome, ml_probability)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """)
     ps.setString(1, event.paymentId)
     ps.setString(2, event.cardId)
@@ -51,6 +50,7 @@ object EventStoreActor {
     ps.setString(6, event.location)
     ps.setLong(7, event.timestamp)
     ps.setString(8, event.outcome.toString)
+    ps.setDouble(9, event.mlProbability)
     ps.executeUpdate()
     ps.close()
     conn.close()
@@ -82,16 +82,17 @@ object EventStoreActor {
       timers.startTimerWithFixedDelay(PrintSummary, 30.seconds)
 
       Behaviors.receiveMessage {
-        case RecordEvent(payment, decision) =>
+        case RecordEvent(payment, decision, mlProbability) =>
           val event = PaymentEvent(
-            paymentId    = payment.id,
-            cardId       = payment.cardId,
-            amount       = payment.amount,
-            merchantId   = payment.merchantId,
-            merchantName = payment.merchantName,
-            location     = payment.location,
-            timestamp    = payment.timestamp,
-            outcome      = decision.outcome
+            paymentId     = payment.id,
+            cardId        = payment.cardId,
+            amount        = payment.amount,
+            merchantId    = payment.merchantId,
+            merchantName  = payment.merchantName,
+            location      = payment.location,
+            timestamp     = payment.timestamp,
+            outcome       = decision.outcome,
+            mlProbability = mlProbability
           )
           insertEvent(event)
           Behaviors.same

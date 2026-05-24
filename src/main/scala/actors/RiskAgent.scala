@@ -19,7 +19,6 @@ object RiskAgent {
   val DedupWindow    = 60000L
   val FlaskUrl       = "http://127.0.0.1:5001/score"
 
-  // HTTP client — reused across all requests
   val httpClient: HttpClient = HttpClient.newHttpClient()
 
   def callFlask(payment: PaymentRequest, velocityCount: Int): Option[(Double, Boolean)] = {
@@ -28,7 +27,7 @@ object RiskAgent {
         .atZone(ZoneId.of("America/Toronto"))
         .getHour
 
-      val locationRisk = if (Set("Tokyo", "Lagos", "Reykjavik").contains(payment.location)) 1 else 0
+      val locationRisk     = if (Set("Tokyo", "Lagos", "Reykjavik").contains(payment.location)) 1 else 0
       val highRiskMerchant = if (payment.merchantName == "Amazon") 1 else 0
 
       val body = ujson.Obj(
@@ -54,7 +53,7 @@ object RiskAgent {
       Some((prob, isFraud))
 
     } catch {
-      case e: Exception => None  // Flask not running — skip ML scoring silently
+      case _: Exception => None
     }
   }
 
@@ -89,22 +88,23 @@ object RiskAgent {
               .filter { case (_, ts) => now - ts < DedupWindow }
 
             // --- Velocity Check ---
-            val cardHistory  = recentPurchases.getOrElse(payment.cardId, List.empty)
-            val recentWindow = cardHistory.filter(t => now - t < VelocityWindow)
+            val cardHistory     = recentPurchases.getOrElse(payment.cardId, List.empty)
+            val recentWindow    = cardHistory.filter(t => now - t < VelocityWindow)
             val velocityTripped = recentWindow.size >= VelocityLimit
 
             val updatedHistory   = now :: recentWindow
             val updatedPurchases = recentPurchases.updated(payment.cardId, updatedHistory)
 
-            // --- ML Scoring (runs alongside rules) ---
-            callFlask(payment, recentWindow.size) match {
+            // --- ML Scoring (called once, result reused for logging and recording) ---
+            val mlResult = callFlask(payment, recentWindow.size)
+            mlResult match {
               case Some((prob, mlFraud)) =>
                 context.log.info(f"  [ML] fraud_probability=$prob%.4f is_fraud=$mlFraud")
               case None =>
                 context.log.info("  [ML] Flask unavailable — skipping ML score")
             }
 
-            // --- Rule-based Decision (still drives actual outcome) ---
+            // --- Rule-based Decision (drives actual outcome) ---
             val outcome = if (velocityTripped) {
               context.log.info(s"  [VELOCITY] Card ${payment.cardId} made ${recentWindow.size} purchases in 60s - auto-flagged!")
               Declined
@@ -137,9 +137,11 @@ object RiskAgent {
 
             context.log.info(s"RiskAgent decision for ${payment.id}: $outcome")
 
+            // Pass ML probability through to event store (-1.0 if Flask unavailable)
+            val mlProb   = mlResult.map(_._1).getOrElse(-1.0)
             val decision = RiskDecision(paymentId = payment.id, outcome = outcome)
             replyTo ! MerchantAgent.ReceiveDecision(decision)
-            eventStore ! EventStoreActor.RecordEvent(forward.payment, decision)
+            eventStore ! EventStoreActor.RecordEvent(forward.payment, decision, mlProb)
 
             active(updatedPurchases, updatedSeenPayments, eventStore)
           }

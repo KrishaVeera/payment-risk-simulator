@@ -27,12 +27,13 @@ case class RiskDecision(
                        )
 
 case class PaymentEvent(
-                         paymentId:    String,
-                         cardId:       String,
-                         amount:       Double,
-                         merchantId:   String,
-                         merchantName: String,
-                         location:     String,
-                         timestamp:    Long,
-                         outcome:      Outcome
+                         paymentId:     String,
+                         cardId:        String,
+                         amount:        Double,
+                         merchantId:    String,
+                         merchantName:  String,
+                         location:      String,
+                         timestamp:     Long,
+                         outcome:       Outcome,
+                         mlProbability: Double  // -1.0 if Flask unavailable
                        )

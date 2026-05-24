@@ -10,15 +10,15 @@ import java.sql.DriverManager
 
 object DashboardServer {
 
-  // --- JSON formats ---
   case class TransactionRow(
-                             paymentId:    String,
-                             cardId:       String,
-                             amount:       Double,
-                             merchantName: String,
-                             location:     String,
-                             outcome:      String,
-                             timestamp:    Long
+                             paymentId:     String,
+                             cardId:        String,
+                             amount:        Double,
+                             merchantName:  String,
+                             location:      String,
+                             outcome:       String,
+                             timestamp:     Long,
+                             mlProbability: Double
                            )
 
   case class StatsRow(
@@ -31,7 +31,7 @@ object DashboardServer {
                      )
 
   object JsonProtocol extends DefaultJsonProtocol {
-    implicit val transactionFormat: RootJsonFormat[TransactionRow] = jsonFormat7(TransactionRow)
+    implicit val transactionFormat: RootJsonFormat[TransactionRow] = jsonFormat8(TransactionRow)
     implicit val statsFormat:       RootJsonFormat[StatsRow]       = jsonFormat6(StatsRow)
   }
 
@@ -43,7 +43,7 @@ object DashboardServer {
     val conn = DriverManager.getConnection(DbUrl)
     val stmt = conn.createStatement()
     val rs   = stmt.executeQuery(
-      s"SELECT payment_id, card_id, amount, merchant_name, location, outcome, timestamp FROM payment_events ORDER BY timestamp DESC LIMIT $limit"
+      s"SELECT payment_id, card_id, amount, merchant_name, location, outcome, timestamp, ml_probability FROM payment_events ORDER BY timestamp DESC LIMIT $limit"
     )
     val rows = scala.collection.mutable.ListBuffer[TransactionRow]()
     while (rs.next()) {
@@ -54,7 +54,8 @@ object DashboardServer {
         rs.getString("merchant_name"),
         rs.getString("location"),
         rs.getString("outcome"),
-        rs.getLong("timestamp")
+        rs.getLong("timestamp"),
+        rs.getDouble("ml_probability")
       )
     }
     rs.close(); stmt.close(); conn.close()
@@ -178,8 +179,8 @@ object DashboardServer {
       margin-top: 4px;
     }
 
-    .stat-card.green .value { color: #4ade80; }
-    .stat-card.red   .value { color: #f87171; }
+    .stat-card.green  .value { color: #4ade80; }
+    .stat-card.red    .value { color: #f87171; }
     .stat-card.yellow .value { color: #fbbf24; }
 
     .table-section {
@@ -201,10 +202,7 @@ object DashboardServer {
       letter-spacing: 1px;
     }
 
-    .last-updated {
-      font-size: 0.75rem;
-      color: #475569;
-    }
+    .last-updated { font-size: 0.75rem; color: #475569; }
 
     table {
       width: 100%;
@@ -264,12 +262,20 @@ object DashboardServer {
       border: 1px solid rgba(251, 191, 36, 0.3);
     }
 
-    .amount { font-weight: 600; color: #e2e8f0; }
-    .card-id { font-family: monospace; font-size: 0.8rem; color: #94a3b8; }
-    .payment-id { font-family: monospace; font-size: 0.7rem; color: #475569; }
+    .ml-prob {
+      font-family: monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
 
-    .stolen { color: #f87171; }
-    .legit  { color: #4ade80; }
+    .ml-prob.high   { color: #f87171; }
+    .ml-prob.medium { color: #fbbf24; }
+    .ml-prob.low    { color: #4ade80; }
+    .ml-prob.na     { color: #475569; }
+
+    .amount     { font-weight: 600; color: #e2e8f0; }
+    .card-id    { font-family: monospace; font-size: 0.8rem; color: #94a3b8; }
+    .payment-id { font-family: monospace; font-size: 0.7rem; color: #475569; }
   </style>
 </head>
 <body>
@@ -285,7 +291,7 @@ object DashboardServer {
   </div>
 </header>
 
-<div class="stats" id="stats">
+<div class="stats">
   <div class="stat-card">
     <div class="label">Total Decisions</div>
     <div class="value" id="total">—</div>
@@ -321,11 +327,12 @@ object DashboardServer {
         <th>Amount</th>
         <th>Merchant</th>
         <th>Location</th>
+        <th>ML Score</th>
         <th>Decision</th>
       </tr>
     </thead>
     <tbody id="transactions">
-      <tr><td colspan="6" style="text-align:center; color:#475569; padding:40px;">
+      <tr><td colspan="7" style="text-align:center; color:#475569; padding:40px;">
         Loading transactions...
       </td></tr>
     </tbody>
@@ -339,8 +346,16 @@ object DashboardServer {
     return 'held';
   }
 
-  function cardClass(cardId) {
-    return cardId.startsWith('STOLEN') ? 'stolen' : 'legit';
+  function mlClass(prob) {
+    if (prob < 0)    return 'na';
+    if (prob >= 0.7) return 'high';
+    if (prob >= 0.4) return 'medium';
+    return 'low';
+  }
+
+  function mlLabel(prob) {
+    if (prob < 0) return '—';
+    return (prob * 100).toFixed(1) + '%';
   }
 
   function shortId(id) {
@@ -370,10 +385,11 @@ object DashboardServer {
       tbody.innerHTML = events.map(e => `
         <tr>
           <td class="payment-id">${shortId(e.paymentId)}</td>
-          <td class="card-id ${cardClass(e.cardId)}">${e.cardId}</td>
+          <td class="card-id">${e.cardId}</td>
           <td class="amount">$${e.amount.toFixed(2)}</td>
           <td>${e.merchantName}</td>
           <td>${e.location}</td>
+          <td><span class="ml-prob ${mlClass(e.mlProbability)}">${mlLabel(e.mlProbability)}</span></td>
           <td><span class="badge ${badgeClass(e.outcome)}">${e.outcome}</span></td>
         </tr>
       `).join('');
