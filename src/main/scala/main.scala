@@ -20,8 +20,8 @@ object Main extends App {
     "payment-risk-simulator"
   )
 
-  // Run for 30 seconds then shut down
-  Thread.sleep(30000)
+  // Run for 60 seconds then shut down
+  Thread.sleep(60000)
   system.terminate()
   Await.result(system.whenTerminated, 5.seconds)
 }

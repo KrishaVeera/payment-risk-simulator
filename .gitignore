@@ -45,3 +45,6 @@ build/
 
 ### Scala ###
 .bsp/
+events.db
+transactions.csv
+fraud_model.pkl
