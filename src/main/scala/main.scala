@@ -20,6 +20,9 @@ object Main extends App {
     "payment-risk-simulator"
   )
 
+  // Start the live dashboard
+  DashboardServer.start()(system)
+
   // Run for 60 seconds then shut down
   Thread.sleep(60000)
   system.terminate()
